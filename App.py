@@ -1,6 +1,6 @@
 import streamlit as st
 import json
-from groq import Groq
+import requests  # Using direct HTTP requests for stability
 
 # --- Configuration & CSS Injection ---
 st.set_page_config(
@@ -15,9 +15,8 @@ st.markdown("""
     :root { --brand: #3182ce; --bg: #ffffff; }
     .stApp { background-color: var(--bg); font-family: sans-serif; }
     
-    /* Bubble Style from your reference */
     .user-bubble {
-        background: #eebbbb; /* Light Red/Pink */
+        background: #eebbbb;
         padding: 12px 18px;
         border-radius: 18px 18px 18px 0px;
         margin-top: 5px;
@@ -55,7 +54,6 @@ st.markdown("""
         padding-bottom: 15px;
     }
 
-    /* Custom classes for the Score Dashboard */
     .score-big {
         font-size: 3.5rem;
         font-weight: 800;
@@ -63,18 +61,12 @@ st.markdown("""
         line-height: 1;
     }
     
-    .metric-row {
-        display: flex;
-        align-items: center;
-        margin-bottom: 8px;
-    }
-    
     .status-pass { color: #1a7f37; font-weight: bold; margin-right: 8px;}
     .status-fail { color: #cf222e; font-weight: bold; margin-right: 8px;}
 </style>
 """, unsafe_allow_html=True)
 
-# --- Scoring Logic based on Table 3 of E-GEO Paper ---
+# --- Scoring Logic ---
 GEO_CRITERIA = [
     "User Intent Alignment",
     "Competitive Differentiation", 
@@ -87,29 +79,27 @@ GEO_CRITERIA = [
     "Factual Preservation"
 ]
 
-def get_groq_client(api_key):
-    return Groq(api_key=api_key)
-
-def analyze_description(client, text):
+def analyze_description_raw(api_key, text):
     """
-    Scores the text 0-100 based on the presence of winning GEO features.
+    Uses standard Python 'requests' instead of the SDK to avoid connection errors.
     """
-    prompt = f"""
-    You are a judge for E-Commerce Product Descriptions based on the "E-GEO" academic paper.
+    url = "https://api.groq.com/openai/v1/chat/completions"
     
-    Your task: Score the following product description out of 100 based on these 9 criteria (from Table 3 of the paper):
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    prompt = f"""
+    You are a strict judge for E-Commerce Product Descriptions based on the "E-GEO" academic paper.
+    
+    Score this description out of 100 based on these 9 criteria:
     {', '.join(GEO_CRITERIA)}
     
-    Scoring Rules:
-    - 90-100: Perfect execution of all criteria (especially scannability + social proof).
-    - 70-89: Good, but missing 1-2 key elements (like social proof or urgency).
-    - 50-69: Average, lacks formatting or distinctive voice.
-    - <50: Poor, generic, block of text.
-
     Return ONLY valid JSON:
     {{
         "score": <integer>,
-        "critique_summary": "<A short, direct paragraph explaining the score to the user>",
+        "critique_summary": "<Short paragraph explaining the score>",
         "breakdown": {{
             "User Intent": {{ "status": "Pass" or "Fail", "comment": "..." }},
             "Competitive Differentiation": {{ "status": "Pass" or "Fail", "comment": "..." }},
@@ -119,23 +109,36 @@ def analyze_description(client, text):
         }}
     }}
 
-    Description to Judge:
-    "{text}"
+    Description: "{text}"
     """
     
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": "Return JSON only."},
+            {"role": "user", "content": prompt}
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.1
+    }
+    
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "You are a strict SEO/GEO Judge. JSON output only."},
-                {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.1 # Low temp for strict, consistent scoring
-        )
-        return json.loads(response.choices[0].message.content)
+        # 30 second timeout to prevent hanging
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        
+        if response.status_code == 200:
+            return json.loads(response.json()['choices'][0]['message']['content'])
+        else:
+            st.error(f"API Error ({response.status_code}): {response.text}")
+            return None
+    except requests.exceptions.ConnectionError:
+        st.error("Connection Error: Could not reach Groq servers. Check your internet connection.")
+        return None
+    except requests.exceptions.Timeout:
+        st.error("Timeout Error: The model took too long to respond.")
+        return None
     except Exception as e:
-        st.error(f"Error analyzing text: {e}")
+        st.error(f"Unexpected Error: {e}")
         return None
 
 # --- UI Layout ---
@@ -145,7 +148,6 @@ with st.sidebar:
     api_key = st.text_input("Groq API Key", type="password")
     st.markdown("---")
     st.markdown("**Criteria:** E-GEO Paper (Table 3)")
-    st.caption("Scoring based on intent, formatting, social proof, and competitiveness.")
 
 st.title("E-GEO Content Judge")
 st.markdown("Evaluate product descriptions against Generative Engine Optimization standards.")
@@ -153,36 +155,31 @@ st.markdown("Evaluate product descriptions against Generative Engine Optimizatio
 if 'result' not in st.session_state:
     st.session_state.result = None
 
-# Input Section
+# Input
 st.markdown('<div class="intent-label">INPUT DESCRIPTION</div>', unsafe_allow_html=True)
-input_text = st.text_area("Paste description...", height=200, label_visibility="collapsed", placeholder="Paste your Amazon/Shopify description here...")
+input_text = st.text_area("Paste description...", height=200, label_visibility="collapsed", placeholder="Paste description here...")
 
 if st.button("Calculate Score", type="primary"):
     if not api_key:
         st.warning("Please provide a Groq API Key.")
     elif not input_text:
-        st.warning("Please enter text to score.")
+        st.warning("Please enter text.")
     else:
-        client = get_groq_client(api_key)
-        with st.spinner("Judging content against E-GEO benchmarks..."):
-            st.session_state.result = analyze_description(client, input_text)
+        with st.spinner("Judging content..."):
+            st.session_state.result = analyze_description_raw(api_key, input_text)
 
-# Results Section
+# Results
 if st.session_state.result:
     res = st.session_state.result
     score = res.get('score', 0)
     
-    # Determine Color based on score
-    if score >= 80:
-        score_color = "#1a7f37" # Green
-    elif score >= 50:
-        score_color = "#d97706" # Orange
-    else:
-        score_color = "#cf222e" # Red
+    # Color Logic
+    if score >= 80: score_color = "#1a7f37"
+    elif score >= 50: score_color = "#d97706"
+    else: score_color = "#cf222e"
 
     st.markdown('<div class="container-box">', unsafe_allow_html=True)
     
-    # 2 Columns: Score on left, Bubble Critique on right
     c1, c2 = st.columns([1, 2])
     
     with c1:
@@ -191,7 +188,6 @@ if st.session_state.result:
     
     with c2:
         st.markdown('<div class="intent-label">JUDGE\'S FEEDBACK</div>', unsafe_allow_html=True)
-        # Using the specific .user-bubble CSS you requested for the feedback text
         st.markdown(f"""
         <div class="user-bubble">
             {res.get('critique_summary')}
@@ -200,7 +196,7 @@ if st.session_state.result:
         
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Detailed Breakdown
+    # Breakdown
     st.markdown('<div class="intent-label">DETAILED PARAMETER BREAKDOWN</div>', unsafe_allow_html=True)
     
     breakdown = res.get('breakdown', {})
