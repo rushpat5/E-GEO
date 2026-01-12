@@ -4,21 +4,21 @@ from groq import Groq
 
 # --- Configuration & CSS Injection ---
 st.set_page_config(
-    page_title="E-GEO Evaluator",
-    page_icon="🛒",
+    page_title="E-GEO Scorer",
+    page_icon="📊",
     layout="wide"
 )
 
-# Injecting the specific CSS provided + a complementary 'system' bubble
+# Injecting the exact CSS provided
 st.markdown("""
 <style>
     :root { --brand: #3182ce; --bg: #ffffff; }
     .stApp { background-color: var(--bg); font-family: sans-serif; }
     
-    /* User Bubble (Input/Original) */
+    /* Bubble Style from your reference */
     .user-bubble {
         background: #eebbbb; /* Light Red/Pink */
-        padding: 15px 20px;
+        padding: 12px 18px;
         border-radius: 18px 18px 18px 0px;
         margin-top: 5px;
         color: #2c3e50;
@@ -28,26 +28,12 @@ st.markdown("""
         border: 1px solid #e2e8f0;
         line-height: 1.5;
     }
-
-    /* System Bubble (Output/Optimized) - Green variant to match theme */
-    .system-bubble {
-        background: #dcfce7; /* Light Green */
-        padding: 15px 20px;
-        border-radius: 18px 18px 0px 18px;
-        margin-top: 5px;
-        color: #14532d;
-        font-size: 1.05rem;
-        font-weight: 500;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-        border: 1px solid #bbf7d0;
-        line-height: 1.5;
-    }
     
     .translation-text {
         color: #718096;
-        font-size: 0.95rem;
+        font-size: 0.9rem;
         font-style: italic;
-        margin-top: 8px;
+        margin-top: 6px;
         margin-left: 5px;
         display: flex;
         align-items: center;
@@ -58,8 +44,8 @@ st.markdown("""
         color: #a0aec0;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        margin-bottom: 4px;
-        margin-top: 20px;
+        margin-bottom: 5px;
+        margin-top: 15px;
         font-weight: 700;
     }
 
@@ -69,162 +55,168 @@ st.markdown("""
         padding-bottom: 15px;
     }
 
-    /* Custom Score Badge */
-    .score-badge {
-        font-size: 3rem;
+    /* Custom classes for the Score Dashboard */
+    .score-big {
+        font-size: 3.5rem;
         font-weight: 800;
         margin: 0;
         line-height: 1;
     }
+    
+    .metric-row {
+        display: flex;
+        align-items: center;
+        margin-bottom: 8px;
+    }
+    
+    .status-pass { color: #1a7f37; font-weight: bold; margin-right: 8px;}
+    .status-fail { color: #cf222e; font-weight: bold; margin-right: 8px;}
 </style>
 """, unsafe_allow_html=True)
 
-# --- Logic (Same as before) ---
+# --- Scoring Logic based on Table 3 of E-GEO Paper ---
 GEO_CRITERIA = [
-    "User Intent Alignment", "Competitive Differentiation", "Social Proof / Reviews",
-    "Compelling Narrative", "Authoritative Tone", "Unique Selling Points (USPs)",
-    "Urgency / Call to Action", "Scannability (Formatting)", "Factual Preservation"
+    "User Intent Alignment",
+    "Competitive Differentiation", 
+    "Social Proof / Reviews",
+    "Compelling Narrative",
+    "Authoritative Tone",
+    "Unique Selling Points (USPs)",
+    "Urgency / Call to Action",
+    "Scannability (Formatting/Bullets)",
+    "Factual Preservation"
 ]
-
-OPTIMIZER_SYSTEM_PROMPT = """
-You are an expert in Generative Engine Optimization (GEO). 
-Based on the "Universally Effective Strategy", rewrite the product description to:
-1. Highlight Unique Value Proposition.
-2. Integrate SEO keywords & User Intent.
-3. Add Social Proof.
-4. Use Markdown (H2, H3, bullets) for scannability.
-5. Be Authoritative yet Empathetic.
-6. End with Urgency/Call to Action.
-7. Maintain strict factual accuracy.
-"""
 
 def get_groq_client(api_key):
     return Groq(api_key=api_key)
 
 def analyze_description(client, text):
-    prompt = f"""
-    Analyze this product description based on E-Commerce GEO principles ({', '.join(GEO_CRITERIA)}).
-    Return a valid JSON object:
-    {{
-        "score": <0-100>,
-        "analysis": {{
-            "User Intent Alignment": {{ "present": <bool>, "feedback": "<string>" }},
-            "Competitive Differentiation": {{ "present": <bool>, "feedback": "<string>" }},
-            "Social Proof / Reviews": {{ "present": <bool>, "feedback": "<string>" }},
-            "Compelling Narrative": {{ "present": <bool>, "feedback": "<string>" }},
-            "Authoritative Tone": {{ "present": <bool>, "feedback": "<string>" }},
-            "Unique Selling Points": {{ "present": <bool>, "feedback": "<string>" }},
-            "Urgency / Call to Action": {{ "present": <bool>, "feedback": "<string>" }},
-            "Scannability": {{ "present": <bool>, "feedback": "<string>" }},
-            "Factual Preservation": {{ "present": <bool>, "feedback": "<string>" }}
-        }},
-        "summary_critique": "<string>"
-    }}
-    Description: "{text}"
     """
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": "JSON Output Only."}, {"role": "user", "content": prompt}],
-            response_format={"type": "json_object"}, temperature=0.3
-        )
-        return json.loads(response.choices[0].message.content)
-    except Exception as e:
-        st.error(f"Error: {e}")
-        return None
+    Scores the text 0-100 based on the presence of winning GEO features.
+    """
+    prompt = f"""
+    You are a judge for E-Commerce Product Descriptions based on the "E-GEO" academic paper.
+    
+    Your task: Score the following product description out of 100 based on these 9 criteria (from Table 3 of the paper):
+    {', '.join(GEO_CRITERIA)}
+    
+    Scoring Rules:
+    - 90-100: Perfect execution of all criteria (especially scannability + social proof).
+    - 70-89: Good, but missing 1-2 key elements (like social proof or urgency).
+    - 50-69: Average, lacks formatting or distinctive voice.
+    - <50: Poor, generic, block of text.
 
-def optimize_description(client, text):
+    Return ONLY valid JSON:
+    {{
+        "score": <integer>,
+        "critique_summary": "<A short, direct paragraph explaining the score to the user>",
+        "breakdown": {{
+            "User Intent": {{ "status": "Pass" or "Fail", "comment": "..." }},
+            "Competitive Differentiation": {{ "status": "Pass" or "Fail", "comment": "..." }},
+            "Social Proof/Reviews": {{ "status": "Pass" or "Fail", "comment": "..." }},
+            "Scannability/Format": {{ "status": "Pass" or "Fail", "comment": "..." }},
+            "Call to Action": {{ "status": "Pass" or "Fail", "comment": "..." }}
+        }}
+    }}
+
+    Description to Judge:
+    "{text}"
+    """
+    
     try:
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": OPTIMIZER_SYSTEM_PROMPT},
-                {"role": "user", "content": f"Rewrite this description:\n\n{text}"}
+                {"role": "system", "content": "You are a strict SEO/GEO Judge. JSON output only."},
+                {"role": "user", "content": prompt}
             ],
-            temperature=0.7
+            response_format={"type": "json_object"},
+            temperature=0.1 # Low temp for strict, consistent scoring
         )
-        return response.choices[0].message.content
+        return json.loads(response.choices[0].message.content)
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error analyzing text: {e}")
         return None
 
 # --- UI Layout ---
 
-# Sidebar
 with st.sidebar:
     st.header("⚙️ Settings")
     api_key = st.text_input("Groq API Key", type="password")
     st.markdown("---")
-    st.markdown("**Design Inspired by E-GEO Paper**")
-    st.caption("Using Llama-3.3-70b")
+    st.markdown("**Criteria:** E-GEO Paper (Table 3)")
+    st.caption("Scoring based on intent, formatting, social proof, and competitiveness.")
 
-st.title("Generative Engine Optimization")
-st.markdown("Testbed for E-Commerce Description Optimization")
+st.title("E-GEO Content Judge")
+st.markdown("Evaluate product descriptions against Generative Engine Optimization standards.")
 
-# Main Container
-if 'analysis_result' not in st.session_state: st.session_state.analysis_result = None
-if 'optimized_text' not in st.session_state: st.session_state.optimized_text = None
+if 'result' not in st.session_state:
+    st.session_state.result = None
 
 # Input Section
-st.markdown('<div class="intent-label">ORIGINAL PRODUCT DESCRIPTION</div>', unsafe_allow_html=True)
-input_text = st.text_area("Paste description...", height=150, label_visibility="collapsed")
+st.markdown('<div class="intent-label">INPUT DESCRIPTION</div>', unsafe_allow_html=True)
+input_text = st.text_area("Paste description...", height=200, label_visibility="collapsed", placeholder="Paste your Amazon/Shopify description here...")
 
-if st.button("Analyze Content", type="primary"):
+if st.button("Calculate Score", type="primary"):
     if not api_key:
-        st.warning("Please provide an API Key.")
+        st.warning("Please provide a Groq API Key.")
     elif not input_text:
-        st.warning("Please provide text.")
+        st.warning("Please enter text to score.")
     else:
         client = get_groq_client(api_key)
-        with st.spinner("Analyzing..."):
-            st.session_state.analysis_result = analyze_description(client, input_text)
-            st.session_state.optimized_text = None 
+        with st.spinner("Judging content against E-GEO benchmarks..."):
+            st.session_state.result = analyze_description(client, input_text)
 
-# Analysis Results
-if st.session_state.analysis_result:
-    res = st.session_state.analysis_result
+# Results Section
+if st.session_state.result:
+    res = st.session_state.result
     score = res.get('score', 0)
-    score_color = "#1a7f37" if score >= 80 else "#d97706" if score >= 50 else "#dc2626"
     
+    # Determine Color based on score
+    if score >= 80:
+        score_color = "#1a7f37" # Green
+    elif score >= 50:
+        score_color = "#d97706" # Orange
+    else:
+        score_color = "#cf222e" # Red
+
     st.markdown('<div class="container-box">', unsafe_allow_html=True)
     
-    c1, c2 = st.columns([1, 3])
+    # 2 Columns: Score on left, Bubble Critique on right
+    c1, c2 = st.columns([1, 2])
+    
     with c1:
         st.markdown('<div class="intent-label">GEO SCORE</div>', unsafe_allow_html=True)
-        st.markdown(f'<p class="score-badge" style="color:{score_color}">{score}</p>', unsafe_allow_html=True)
+        st.markdown(f'<p class="score-big" style="color:{score_color}">{score}/100</p>', unsafe_allow_html=True)
     
     with c2:
-        st.markdown('<div class="intent-label">CRITIQUE</div>', unsafe_allow_html=True)
-        # Using the user-bubble style for the critique text
+        st.markdown('<div class="intent-label">JUDGE\'S FEEDBACK</div>', unsafe_allow_html=True)
+        # Using the specific .user-bubble CSS you requested for the feedback text
         st.markdown(f"""
         <div class="user-bubble">
-            {res.get('summary_critique')}
+            {res.get('critique_summary')}
         </div>
         """, unsafe_allow_html=True)
         
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Criteria Grid
-    with st.expander("View Detailed Criteria Breakdown"):
-        for k, v in res.get('analysis', {}).items():
-            icon = "✅" if v.get('present') else "❌"
-            st.write(f"**{icon} {k}:** {v.get('feedback')}")
-
-    # Optimization Action
-    st.markdown('<div class="intent-label">OPTIMIZATION</div>', unsafe_allow_html=True)
-    if st.button("✨ Generate Optimized Description"):
-        client = get_groq_client(api_key)
-        with st.spinner("Applying Universal Strategy..."):
-            st.session_state.optimized_text = optimize_description(client, input_text)
-
-# Optimized Output
-if st.session_state.optimized_text:
-    st.markdown(f"""
-    <div class="intent-label">OPTIMIZED RESULT (E-GEO COMPLIANT)</div>
-    <div class="system-bubble">
-        {st.session_state.optimized_text.replace(chr(10), '<br>')}
-    </div>
-    <div class="translation-text">
-        Generated using Llama-3.3 | Optimized for Scannability, Social Proof, and Intent.
-    </div>
-    """, unsafe_allow_html=True)
+    # Detailed Breakdown
+    st.markdown('<div class="intent-label">DETAILED PARAMETER BREAKDOWN</div>', unsafe_allow_html=True)
+    
+    breakdown = res.get('breakdown', {})
+    for criteria, details in breakdown.items():
+        status = details.get('status', 'Fail')
+        comment = details.get('comment', '')
+        
+        status_class = "status-pass" if status == "Pass" else "status-fail"
+        icon = "✅" if status == "Pass" else "⚠️"
+        
+        st.markdown(f"""
+        <div style="background: #f6f8fa; padding: 10px; border-radius: 8px; margin-bottom: 8px; border: 1px solid #e1e4e8;">
+            <div style="font-size: 0.85rem; font-weight: 600; color: #24292e;">{criteria}</div>
+            <div style="font-size: 0.95rem;">
+                <span class="{status_class}">{icon} {status}</span>
+                <span style="color: #586069;">{comment}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
